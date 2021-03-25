@@ -1,7 +1,7 @@
-max_length = 20
-max_char_len = 20
-max_word_len = 20
-word_length = 20
+max_length = 25
+max_char_len = 25
+max_word_len = 25
+word_length = 25
 
 embedding_size = 200
 

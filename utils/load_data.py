@@ -19,8 +19,8 @@ words_vocab_path = os.path.join(home_dir, 'data/vocab_words.txt')
 # 参数集合
 class args:
     word_embedding_len = 200
-    max_char_len = 20
-    max_word_len = 20
+    max_char_len = 25
+    max_word_len = 25
     corpus_path = os.path.join(home_dir, 'data/lcqmc')
 
 # 加载字典

@@ -7,11 +7,13 @@
 @Date   ：2020/11/3 9:14 PM
 @Desc   ：
 =================================================='''
+from undergraduate.args import keep_prob
 import tensorflow as tf
 
 
 class Graph:
     def __init__(self, args, word_embedding=None):
+        self.args = args
         self.embedding_size = args.embedding_size
         # self.batch_size = args.batch_size
         self.max_length = args.max_length
@@ -68,9 +70,6 @@ class Graph:
         # State Function
         gate_a = build_gate(output_a, output_b, scope='gate_a')
         gate_b = build_gate(output_b, output_a, scope='gate_b')
-        print('m_oa_ob', m_oa_ob)
-        print('output_a', output_a)
-        print('gate_a', gate_a)
         # [B, 64]
         output_a = tf.multiply(gate_a, m_oa_ob) + (1 - gate_a) * output_a
         output_b = tf.multiply(gate_b, m_ob_oa) + (1 - gate_b) * output_b
@@ -79,7 +78,7 @@ class Graph:
 
     def forward(self):
         same_word = tf.expand_dims(tf.expand_dims(self.same_word, axis=-1), axis=-1)
-        same_word = tf.tile(same_word, [1, 20, 1])
+        same_word = tf.tile(same_word, [1, self.args.max_length, 1])
 
         self.q_embedding = tf.nn.embedding_lookup(self.embedding_table, self.q_text)
         self.a_embedding = tf.nn.embedding_lookup(self.embedding_table, self.a_text)
@@ -90,80 +89,18 @@ class Graph:
         self.answer_in = tf.concat((self.a_embedding, self.word_a_embedding, same_word), -1)
         
         # [B, 20, 401]
-        self.query_in = self.dense(self.query_in,  64, activation='relu')
-        self.query_in = self.dropout(self.query_in, 0.8)
-        self.answer_in = self.dense(self.answer_in, 64, activation='relu')
-        self.answer_in = self.dropout(self.answer_in, 0.8)
+        self.query_in = self.dense(self.query_in,  128, activation='swish', keep_prob=0.8)
+        self.answer_in = self.dense(self.answer_in, 128, activation='swish', keep_prob=0.8)
 
-        # [B, 20, 128]
-        self.query_in = tf.contrib.layers.layer_norm(self.query_in)
-        self.answer_in = tf.contrib.layers.layer_norm(self.answer_in)
+        self.querys, self.answers = self.encode(self.query_in, self.answer_in)
 
-        print(self.query_in)
-        with tf.variable_scope('p_lstm', reuse=None):
-            self.query_pre, _ = self.BiLSTM(self.query_in)
-        with tf.variable_scope('a_lstm', reuse=None):
-            self.answer_pre, _ = self.BiLSTM(self.answer_in)
-
-        self.query_pre = tf.concat(self.query_pre, -1)
-        self.answer_pre = tf.concat(self.answer_pre, -1)
-        # self.query_pre = tf.contrib.layers.layer_norm(self.query_pre)
-        # self.answer_pre = tf.contrib.layers.layer_norm(self.answer_pre)
-        self.query_pre = self.dense(self.query_pre, 64, activation='relu')
-        self.answer_pre = self.dense(self.answer_pre, 64, activation='relu')
-
-        self.querys, self.answers = self.encode(self.query_pre, self.answer_pre)
-        self.querys.append(self.query_pre)
-        self.answers.append(self.answer_pre)
         self.query_cnn_enc = tf.concat(self.querys, axis=-1)
         self.answer_cnn_enc = tf.concat(self.answers, axis=-1)
         
-        print('query_cnn_enc: ', self.query_cnn_enc)
-        print('answer_cnn_enc: ', self.answer_cnn_enc)
+        output_a = self.dense(self.query_cnn_enc, 128, activation='swish', keep_prob=0.8)
+        output_b = self.dense(self.answer_cnn_enc, 128, activation='swish', keep_prob=0.8)
 
-        self.query_cnn_enc = self.dense(self.query_cnn_enc, 64, activation='relu')
-        self.query_cnn_enc = self.dropout(self.query_cnn_enc, 0.8)
-
-        self.answer_cnn_enc = self.dense(self.answer_cnn_enc, 64, activation='relu')
-        self.answer_cnn_enc = self.dropout(self.answer_cnn_enc, 0.8)
-
-        self.average_cnn_q = self.global_average_pooling(self.query_cnn_enc)
-        self.max_cnn_q = self.global_max_pooling(self.query_cnn_enc)
-        # print('average_cnn_q', self.average_cnn_q)
-        # print('max_cnn_q', self.max_cnn_q)
-
-        self.average_cnn_a = self.global_average_pooling(self.answer_cnn_enc)
-        self.max_cnn_a = self.global_max_pooling(self.answer_cnn_enc)
-
-        self.q_enc = tf.concat((tf.squeeze(self.average_cnn_q, 1), tf.squeeze(self.max_cnn_q, 1)), -1)
-        self.a_enc = tf.concat((tf.squeeze(self.average_cnn_a, 1), tf.squeeze(self.max_cnn_a, 1)), -1)
-        # print('encode_cnn_a', self.encode_cnn_a)
-
-        self.attention_q, self.attention_a = self.attention_pooling(self.query_pre, self.answer_pre)
-        print('attention_q ----', self.attention_q)
-        # (?, 20, 64)
-        print('attention_a ----', self.attention_a)
-        # (?, 20, 64)
-        V_a = tf.concat((self.query_cnn_enc, self.attention_q, self.query_cnn_enc - self.attention_q, tf.multiply(self.query_cnn_enc, self.attention_q)), axis=-1)
-        V_b = tf.concat((self.answer_cnn_enc, self.attention_a, self.answer_cnn_enc - self.attention_a, tf.multiply(self.answer_cnn_enc, self.attention_a)), axis=-1)
-        print('V_a', V_a)
-        print('V_b', V_b)
-        v_a_max = tf.reduce_max(V_a, axis=1)
-        v_a_avg = tf.reduce_mean(V_a, axis=1)
-        v_b_max = tf.reduce_max(V_b, axis=1)
-        v_b_avg = tf.reduce_mean(V_b, axis=1)
-        print('v_a_max', v_a_max)
-        # 64 + 64 + 64
-        output_a = tf.concat((v_a_max, self.q_enc, v_a_avg), axis=-1)
-        # (8*s_b -8)
-        output_b = tf.concat((v_b_max, self.a_enc, v_b_avg), axis=-1)
-        # [256]
-        # print('attention', self.query)
-        # print('attention', self.answer)
-        # self.query = tf.squeeze(self.query, 1)                
-        # self.answer = tf.squeeze(self.answer, 1)
-        
-        self.concat = tf.concat((output_a, output_b, tf.abs(output_a - output_b), output_a + output_b), axis=-1)
+        self.concat = tf.concat((output_a, output_b, output_a - output_b, tf.abs(output_a - output_b), output_a + output_b), axis=-1)
         # self.concat = tf.concat((output_a, output_b), axis=-1)
         # print('output_a', output_a)
         # output_a = tf.contrib.layers.layer_norm(output_a)
@@ -176,17 +113,26 @@ class Graph:
         # self.score = tf.expand_dims(self.score, -1)
         # neg_result = 1 - self.score
         # self.cos_logits = tf.concat([neg_result, self.score], axis=1)
+        shape = self.concat.shape.as_list()
+        logits = tf.reshape(self.concat, [-1, shape[1]*shape[2]])
+        logits = self.batch_norm(logits)
+        logits = self.dense(logits, 384, activation='swish', keep_prob=0.8)
+        logits = self.batch_norm(logits)
+        logits = self.dense(logits, 256, activation='swish', keep_prob=0.8)
+        logits = self.dense(logits, 2, activation='softmax')
+        self.train(logits)
 
-        # shape = self.concat.shape.as_list()
-        # self.logits = tf.reshape(self.concat, [-1, shape[1]*shape[2]])
-        self.logits = self.dense(self.concat, 64, activation=tf.nn.tanh)
-        self.logits = self.dense(self.logits, 2, activation='softmax')
-        self.train(self.logits)
-
-    def BiLSTM(self, x):
-        fw_cell = tf.nn.rnn_cell.BasicLSTMCell(64)
-        bw_cell = tf.nn.rnn_cell.BasicLSTMCell(64)
-        return tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, x, dtype=tf.float32)
+    def BiLSTM(self, x, layer):
+        if layer == 1:
+            fw_cell = tf.nn.rnn_cell.BasicLSTMCell(128)
+            bw_cell = tf.nn.rnn_cell.BasicLSTMCell(128)
+            return tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, x, dtype=tf.float32)
+        else: 
+            fw_cell = [tf.nn.rnn_cell.BasicLSTMCell(128) for _ in range(layer)]
+            bw_cell = [tf.nn.rnn_cell.BasicLSTMCell(128) for _ in range(layer)]
+            multi_fw_cell = tf.nn.rnn_cell.MultiRNNCell(fw_cell)
+            multi_bw_cell = tf.nn.rnn_cell.MultiRNNCell(bw_cell)
+            return tf.nn.bidirectional_dynamic_rnn(multi_fw_cell, multi_bw_cell, x, dtype=tf.float32)
     
     def BiGRU(self, x):
         fw_cell = tf.nn.rnn_cell.GRUCell(64)
@@ -196,53 +142,52 @@ class Graph:
     def encode(self, query, answer):
         query_result = []
         answer_result = []
-        print('encoder query in:', query)
-        print('encoder answer in:', answer)
         # [B, L, 128]
         for layer, (size, filters) in enumerate(self.filter_nums):
             query1 = tf.expand_dims(query, -1)
             answer1 = tf.expand_dims(answer, -1)
             # [B, L, 128, 1]
-            query1 = self.nin_network(query1, filters/4)
             query1 = self.cnn_cell(query1, filters, size) # [B, 20, 128, 32]
-            # print('query1', query1)
-            # print('query1', query1)
-            # [B, L, 128, 8]
-            answer1 = self.nin_network(answer1, filters/4)
+            query2 = self.nin_network(query1, filters/4)
+
             answer1 = self.cnn_cell(answer1, filters, size)
+            answer2 = self.nin_network(answer1, filters/4)
+
+            query1 += self.squeeze_excitation_layer(
+                self.cnn_cell(query2, filters, size), out_dim=filters, ratio=4)
+            answer1 += self.squeeze_excitation_layer(
+                self.cnn_cell(answer2, filters, size), out_dim=filters, ratio=4)
 
             shape = query1.shape.as_list()
-            # [B, L 128 * 8]
-            query2 = tf.reshape(query1, [-1, shape[1], shape[2]*shape[3]])
-            answer2 = tf.reshape(answer1, [-1, shape[1], shape[2]*shape[3]])
-            # print('query2', query2)
-            # [B, L, 1024]
-            with tf.variable_scope('p_gru_' + str(layer), reuse=None):
-                self.q_state, _ = self.BiGRU(query2)
-            with tf.variable_scope('a_gru_' + str(layer), reuse=None):
-                self.a_state, _ = self.BiGRU(answer2)
-            q_state = tf.concat(self.q_state, -1)
-            a_state = tf.concat(self.a_state, -1)
-            # print('q_state: ', q_state)
-            # # [B, L, 128]
-            q_state = self.dense(q_state, filters, activation='relu')
-            a_state = self.dense(a_state, filters, activation='relu')
+            query1 = tf.reshape(query1, shape=[-1, shape[1], shape[2] * shape[3]])
+            answer1 = tf.reshape(answer1, shape=[-1, shape[1], shape[2] * shape[3]])
+
+            query1 = self.dense(query1, 128, 'swish')
+            answer1 = self.dense(answer1, 128, 'swish')
+
+            with tf.variable_scope('q_lstm_%s' % layer, reuse=None):
+                self.query_pre, _ = self.BiLSTM(query1, 1)
+            with tf.variable_scope('a_lstm_%s' % layer, reuse=None):
+                self.answer_pre, _ = self.BiLSTM(answer1, 1)
+
+            query2 = tf.concat(self.query_pre, -1)
+            query2 = self.dense(query2, 128, 'swish')
             
-            query1 += self.squeeze_excitation_layer(
-                self.cnn_cell(query1, filters, size), out_dim=filters, ratio=4)
-            answer1 += self.squeeze_excitation_layer(
-                self.cnn_cell(answer1, filters, size), out_dim=filters, ratio=4)
-            
-            # shape = query1.shape.as_list()
-            # print('query1', query1)
-            query = tf.reshape(query1, [-1, shape[1], shape[2]*shape[3]])
-            query = self.dense(query, 64, activation='relu')
-            answer = tf.reshape(answer1, [-1, shape[1], shape[2]*shape[3]])
-            answer = self.dense(answer, 64, activation='relu')
-            print('result_q: ', query)
-            print('result_a: ', answer)
-            query_result.append(query)
-            answer_result.append(answer)
+            answer2 = tf.concat(self.answer_pre, -1)
+            answer2 = self.dense(answer2, 128, 'swish')
+
+            attentionQ = self.AttentionLayer(query2, answer2)
+            attentionA = self.AttentionLayer(answer2, query2)
+
+            attention_q, attention_a = self.attention_pooling(query2, answer2)
+            V_q = tf.concat((query2, attentionQ, attention_q, query2 - attention_q, tf.multiply(query2, attention_q)), axis=-1)
+            V_a = tf.concat((answer2, attentionA, attention_a, answer2 - attention_a, tf.multiply(answer2, attention_a)), axis=-1)
+
+            V_q = self.dense(V_q, 256, activation='swish', keep_prob=0.8)
+            V_a = self.dense(V_a, 256, activation='swish', keep_prob=0.8)
+
+            query_result.append(V_q)
+            answer_result.append(V_a)
 
         return query_result, answer_result
 
@@ -280,20 +225,29 @@ class Graph:
     def averagepool(self, inputs):
         return tf.layers.average_pooling2d(inputs, pool_size=(2, 2), strides=(2, 2), padding='valid')
 
-    def dense(self, inputs, units, activation):
+    def dense(self, inputs, units, activation, keep_prob=None):
         if activation == 'relu':
-            return tf.layers.dense(inputs, units, activation=tf.nn.relu,
+            ret = tf.layers.dense(inputs, units, activation=tf.nn.relu,
                                    use_bias=True, kernel_initializer=self.initializer)
-        if activation == 'leaky_relu':
-            return tf.layers.dense(inputs, units, activation=tf.nn.leaky_relu,
+        elif activation == 'leaky_relu':
+            ret = tf.layers.dense(inputs, units, activation=tf.nn.leaky_relu,
                                    use_bias=True, kernel_initializer=self.initializer)
-        if activation == 'selu':
-            return tf.layers.dense(inputs, units, activation=tf.nn.selu,
+        elif activation == 'selu':
+            ret = tf.layers.dense(inputs, units, activation=tf.nn.selu,
                                    use_bias=True, kernel_initializer=self.initializer)
-        return tf.layers.dense(inputs, units, activation=activation,
+        elif activation == 'swish':
+            ret = tf.layers.dense(inputs, units, activation=tf.nn.swish, use_bias=True, kernel_initializer=self.initializer)
+        else:
+            ret = tf.layers.dense(inputs, units, activation=activation,
                                    use_bias=True, kernel_initializer=self.initializer)
+
+        if keep_prob:
+            return self.dropout(ret, keep_prob)
+        else:
+            return ret
+
     def batch_norm(self, input_x):
-        return tf.layers.batch_normalization(input_x)
+        return tf.layers.batch_normalization(input_x, training=self.is_training)
 
     def global_average_pooling(self, inputs):
         return tf.reduce_mean(inputs, [1], keep_dims=True)
@@ -331,8 +285,6 @@ class Graph:
             )  # G    b*m*n
             self.sigma_q = tf.nn.softmax(self.G, axis=2)
             self.sigma_a = tf.nn.softmax(self.G, axis=1)
-            print('self.sigma_q: ', self.sigma_q)
-            print('self.sigma_a: ', self.sigma_a)
             # self.sigma_q2 = tf.nn.softmax(self.mean_g_q, axis=1)
             # self.sigma_a2 = tf.nn.softmax(self.mean_g_a, axis=2)
             # self.mean_g_q = tf.reduce_mean(self.sigma_q, axis=2, keepdims=True)
@@ -368,6 +320,10 @@ class Graph:
                                                           decay_steps=5000, end_learning_rate=0.000001, cycle=True,
                                                           power=0.5)
         self.train_op = tf.train.AdamOptimizer(self.current_learning).minimize(self.loss, global_step=self.global_step)
+
+        update_ops = tf.compat.v1.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            self.train_op = tf.group([self.train_op, update_ops])
 
         self.prediction = tf.argmax(logits, axis=1)
         correct_prediction = tf.equal(tf.cast(self.prediction, tf.int32), self.label)

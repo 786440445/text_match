@@ -14,6 +14,8 @@ from undergraduate.dataloader import dataloader
 from utils.load_embedding import load_embedding_table
 from utils.data_utils import calc_f1_score
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 train_dataloader = dataloader('train.txt', batch_size=args.batch_size)
 train_dataset = tf.data.Dataset.from_generator(train_dataloader.generator, output_types=(tf.int32, tf.int32, tf.int32, tf.int32, tf.float32, tf.int32)).repeat(args.epochs)
 train_dataset = train_dataset.map(lambda x, y, m, n, z, s: (x, y, m, n, z, s), num_parallel_calls=16).prefetch(buffer_size=3000)
@@ -32,9 +34,13 @@ saver = tf.train.Saver(max_to_keep=5)
 
 with tf.Session(config=config)as sess:
     logdir = os.path.join(home_dir, 'logs/arcnn')
+    model_path = os.path.join(home_dir, 'output/mymodel')
+    if not os.path.exists(model_path):
+        os.makedirs(model_path)
+
     writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
     if args.restore:
-        saver.restore(sess, os.path.join('output/mymodel', args.restore_path))
+        saver.restore(sess, os.path.join(model_path, args.restore_path))
     else:
         sess.run(tf.global_variables_initializer())
     steps = len(train_dataloader)
@@ -91,8 +97,8 @@ with tf.Session(config=config)as sess:
         acc = total_acc/eval_steps
         print('loss_eval: %.4f  f1: %.4f    acc_eval: %.4f' % (total_loss/eval_steps, f1_score, acc))
         if f1_score > old_f1:
-            saver.save(sess, os.path.join(home_dir, 'output/mymodel/SE-ACNN_{}_f1_{:.4f}_acc_{:.4f}.ckpt'.format(epoch, f1_score, acc)))
-            saver.save(sess, os.path.join(home_dir, 'output/mymodel/final_model.ckpt'))
+            saver.save(sess, os.path.join(model_path, 'SE-ACNN_{}_f1_{:.4f}_acc_{:.4f}.ckpt'.format(epoch, f1_score, acc)))
+            saver.save(sess, os.path.join(model_path, 'final_model.ckpt'))
             old_f1 = f1_score
         else:
             print('not improved')

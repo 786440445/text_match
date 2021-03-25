@@ -191,23 +191,23 @@ def shuffle(*arrs):
     return tuple(arr[p] for arr in arrs)
 
 def calc_f1_score(preds, labels):
-    TP = 0
-    TN = 0
-    FP = 0
-    FN = 0
+    TP = 0 # T->T
+    TN = 0 # F->F
+    FP = 0 # F->T
+    FN = 0 # T->F
     for pred, label in zip(preds, labels):
         if pred == 1 and label == 1:
             TP += 1
         elif pred == 1 and label == 0:
             FP += 1
-        elif pred == 0 and label == 1:
-            TN += 1
         elif pred == 0 and label == 0:
+            TN += 1
+        elif pred == 0 and label == 1:
             FN += 1
         else:
             pass
     pre = TP / (TP + FP)
-    rec = TP / (TP + TN)
+    rec = TP / (TP + FN)
     f1 = 2 * pre * rec / (pre + rec)
     return f1
 
